@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using gs;
 using UnityEngine;
 using VoxelSystem.PointCloud;
 
@@ -101,7 +102,7 @@ public static class ImportPC
         return new PointCloud<T>(bounds, points);
     }
 
-    public static IEnumerable<T> ReadPtsOneByOnePoint<T>(string path, char delimiter, bool flipAxes = false, int offset = 0, int maxPointsToRead = 0)
+    public static IEnumerable<T> ReadPtsOneByOnePoint<T>(string path, char delimiter, bool flipAxes = false, int offset = 0, int lastPointToRead = 0)
     {
         var fileStream = new FileStream(@path, FileMode.Open, FileAccess.Read);
         using (var streamReader = new StreamReader(fileStream, Encoding.UTF8))
@@ -110,9 +111,9 @@ public static class ImportPC
             if (pointsText == null)
                 throw new ArgumentException("File with no points!");
             
-            var pointNum = maxPointsToRead != 0 ? maxPointsToRead : int.Parse(pointsText);
+            var lastPoint = lastPointToRead != 0 ? lastPointToRead : int.Parse(pointsText);
 
-            for (var i = offset; i < pointNum; i++)
+            for (var i = offset; i < lastPoint; i++)
             {
                 var line = streamReader.ReadLine();
                 var pointValues = line.Split(delimiter);
@@ -132,6 +133,70 @@ public static class ImportPC
                 }
 
                 yield return (T) Activator.CreateInstance(typeof(T), x, y, z);
+            }
+        }
+    }
+
+    public static IEnumerable<Vector3[]> ReadPtsNPoints(string path, char delimiter, bool flipAxes = false, int offset = 0, int lastPointToRead = 0, int chunkSize = 100000)
+    {
+        var fileStream = new FileStream(@path, FileMode.Open, FileAccess.Read);
+        using (var streamReader = new StreamReader(fileStream, Encoding.UTF8))
+        {
+            var pointsText = streamReader.ReadLine();
+            if (pointsText == null)
+                throw new ArgumentException("File with no points!");
+
+            var lastPoint = int.Parse(pointsText);
+
+            if (lastPointToRead != 0)
+            {
+                lastPoint = lastPointToRead;
+            }
+
+            for (var i = 0; i < offset; i++)
+            {
+                streamReader.ReadLine();
+            }
+
+            var pointsRead = 0;
+            while (true)
+            {
+                if (lastPoint == pointsRead)
+                {
+                    break;
+                }
+
+                if (pointsRead  + chunkSize > lastPoint)
+                {
+                    chunkSize = lastPoint - pointsRead;
+                }
+
+                var points = new Vector3[chunkSize];
+                for (var i = 0; i < chunkSize; i++)
+                {
+                    var line = streamReader.ReadLine();
+                    var pointValues = line.Split(delimiter);
+
+                    var x = float.Parse(pointValues[0]);
+                    float y;
+                    float z;
+                    if (flipAxes)
+                    {
+                        z = float.Parse(pointValues[1]);
+                        y = float.Parse(pointValues[2]);
+                    }
+                    else
+                    {
+                        y = float.Parse(pointValues[1]);
+                        z = float.Parse(pointValues[2]);
+                    }
+
+                    points[i] = new Vector3(x, y, z);
+                }
+
+                pointsRead += chunkSize;
+
+                yield return points;
             }
         }
     }
