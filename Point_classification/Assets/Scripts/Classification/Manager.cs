@@ -1,10 +1,13 @@
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Threading.Tasks;
+using CGALDotNet;
+using CGALDotNet.Polyhedra;
+using CGALDotNetGeometry.Numerics;
 using g3;
 using UnityEngine;
 using VoxelSystem.PointCloud;
+using Vector3d = g3.Vector3d;
 
 public class Manager : MonoBehaviour
 {
@@ -13,29 +16,31 @@ public class Manager : MonoBehaviour
     public bool VisualisePoints;
     public int VisualiseNPoints = 1000;
     public float MaxDistToObject = 0.1f;
-    public string ExportFilePath;
-    public bool ClearExportFile;
+    public string ExportPointsFilePath;
+    public string ExportSurfaceFilePath;
+    public bool ClearExportFiles;
     public int PointOffset = 0;
     public int LastPointToRead = 0;
     public bool Distance;
     public bool Coordinates;
-    public bool ObjectId;
+    public bool SurfaceId;
     private BoundsOctree<BuildingComponentTriangle> _buildingComponentTriangleBoundsOctree;
     // Start is called before the first frame update
     async Task Start()
     {
+        if (ClearExportFiles)
+        {
+            System.IO.File.WriteAllText(ExportPointsFilePath, string.Empty);
+            System.IO.File.WriteAllText(ExportSurfaceFilePath, string.Empty);
+        }
+
         var boxSize = MaxDistToObject * 2;
-        UpdateBoundsOctree(boxSize);
+        await UpdateBoundsOctree(boxSize);
         //visualise some points to check if they match with the 3d model
         if (VisualisePoints)
         {
             var pointCloud = ImportPC.ReadPts<Point>(PcPath, ' ', true, VisualiseNPoints, 10000);
             CreatePointsInScene(pointCloud, VisualiseNPoints, 0.1f);
-        }
-
-        if (ClearExportFile)
-        {
-            System.IO.File.WriteAllText(ExportFilePath, string.Empty);
         }
 
         var squaredMaxDistanceToObject = MaxDistToObject * MaxDistToObject;
@@ -47,26 +52,26 @@ public class Manager : MonoBehaviour
             {
                 var pointCloudPoint = points[i];
                 var closestObject = FindClosestObjectIdNDistance(pointCloudPoint, squaredMaxDistanceToObject, boxSize);
-                if (Coordinates && ObjectId && Distance)
+                if (Coordinates && SurfaceId && Distance)
                 {
                     pointsToExport[i] =
                         $"{pointCloudPoint.x},{pointCloudPoint.z},{pointCloudPoint.y},{closestObject.Item1},{closestObject.Item2}";
                 }
-                else if (ObjectId && Distance)
+                else if (SurfaceId && Distance)
                 {
                     pointsToExport[i] = $"{closestObject.Item1},{closestObject.Item2}";
                 }
-                else if (Coordinates && ObjectId)
+                else if (Coordinates && SurfaceId)
                 {
                     pointsToExport[i] = $"{pointCloudPoint.x},{pointCloudPoint.z},{pointCloudPoint.y},{closestObject.Item1}";
                 }
-                else if (ObjectId)
+                else if (SurfaceId)
                 {
                     pointsToExport[i] = $"{closestObject.Item1}";
                 }
             }
 
-            await AsyncWriting(pointsToExport);
+            await AsyncWriting(ExportPointsFilePath, pointsToExport);
             pointsProcessed += points.Length;
             Debug.Log($"{pointsProcessed} points are processed!");
         }
@@ -86,7 +91,7 @@ public class Manager : MonoBehaviour
         }
     }
 
-    private void UpdateBoundsOctree(float octreeNodeSize)
+    private async Task UpdateBoundsOctree(float octreeNodeSize)
     {
         var meshFilters = GameObject.FindObjectsOfType<MeshFilter>();
         //identify scene bounds needed for the octree
@@ -101,27 +106,58 @@ public class Manager : MonoBehaviour
 
         _buildingComponentTriangleBoundsOctree =
             new BoundsOctree<BuildingComponentTriangle>(largestBoundsSize, sceneBounds.center, octreeNodeSize, 1.25f);
+
+        var objectsSurfacesText = new List<string>();
+
         //update octree
         foreach (var meshFilter in meshFilters)
         {
-            var buildingComponentTriangles = BuildingComponentTriangles(meshFilter, meshFilter.GetInstanceID());
+            var polyhedron = CGALMeshExtensions.ToCGALPolyhedron3<EIK>(meshFilter.sharedMesh);
 
-            foreach (var triangle in buildingComponentTriangles)
+            if (!polyhedron.IsValid)
             {
-                var triangleBounds = GetBounds(new Vector3[] { Vector3dToVector(triangle.Triangle.V0), Vector3dToVector(triangle.Triangle.V1), Vector3dToVector(triangle.Triangle.V2) });
+                Debug.Log($"{meshFilter.name} is not valid");
+                continue;
+            }
 
-                _buildingComponentTriangleBoundsOctree.Add(triangle, triangleBounds);
+            var id = meshFilter.GetInstanceID();
+            var surfaces = new List<Polyhedron3<EIK>>();
+            polyhedron.Split(surfaces);
+
+            var i = 0;
+            foreach (var surface in surfaces)
+            {
+                var surfaceId = $"{id}_{i}";
+                var box3D = surface.FindBoundingBox();
+                var normals = new CGALDotNetGeometry.Numerics.Vector3d[1];
+                surface.GetFaceNormals(normals, 1);
+                var normal = normals[0];
+                var point = new Point3d(normal.x, normal.y, normal.z);
+                var objSurfaceText = $"{surfaceId}, {box3D.Min}, {box3D.Max}, {point}";
+                objectsSurfacesText.Add(objSurfaceText);
+
+                var buildingComponentTriangles = BuildingComponentTriangles(surface, surfaceId);
+
+                foreach (var triangle in buildingComponentTriangles)
+                {
+                    var triangleBounds = GetBounds(new Vector3[] { Vector3dToVector(triangle.Triangle.V0), Vector3dToVector(triangle.Triangle.V1), Vector3dToVector(triangle.Triangle.V2) });
+
+                    _buildingComponentTriangleBoundsOctree.Add(triangle, triangleBounds);
+                }
+
+                i++;
             }
         }
+        await AsyncWriting(ExportSurfaceFilePath, objectsSurfacesText.ToArray());
     }
 
-    private (int,float) FindClosestObjectIdNDistance(Vector3 point, float squaredMaxDistanceToObject, float boxSize)
+    private (string,float) FindClosestObjectIdNDistance(Vector3 point, float squaredMaxDistanceToObject, float boxSize)
     {
         var pointBounds = new Bounds(point, new Vector3(boxSize, boxSize, boxSize));
         var collidingWithTriangles = new List<BuildingComponentTriangle>();
         _buildingComponentTriangleBoundsOctree.GetColliding(collidingWithTriangles, pointBounds);
 
-        var closestObjectId = 0;
+        var closestSurfaceId = "";
         var closestDistance = squaredMaxDistanceToObject;
         foreach (var triangle in collidingWithTriangles)
         {
@@ -129,16 +165,16 @@ public class Manager : MonoBehaviour
             if (closestDistance > distance.DistanceSquared)
             {
                 closestDistance = (float)distance.DistanceSquared;
-                closestObjectId = triangle.ObjectId;
+                closestSurfaceId = triangle.SurfaceId;
             }
         }
 
-        return (closestObjectId, Mathf.Sqrt(closestDistance));
+        return (closestSurfaceId, Mathf.Sqrt(closestDistance));
     }
 
-    private async Task AsyncWriting(string[] points)
+    private async Task AsyncWriting(string filePath, string[] points)
     {
-        using (FileStream stream = new FileStream(ExportFilePath, FileMode.Append, FileAccess.Write))
+        using (FileStream stream = new FileStream(filePath, FileMode.Append, FileAccess.Write))
         {
             using StreamWriter outputFile = new(stream);
             {
@@ -148,24 +184,20 @@ public class Manager : MonoBehaviour
                 }
             }
         }
-
     }
 
-    private BuildingComponentTriangle[] BuildingComponentTriangles(MeshFilter meshFilter, int id)
+    private BuildingComponentTriangle[] BuildingComponentTriangles(Polyhedron3 polyhedron, string id)
     {
-        var buildingComponentTriangles = new BuildingComponentTriangle[meshFilter.sharedMesh.triangles.Length/3];
+        var triangles = new CGALDotNetGeometry.Shapes.Triangle3d[polyhedron.FaceCount];
+        polyhedron.GetTriangles(triangles, polyhedron.FaceCount);
 
-        var triangles = meshFilter.sharedMesh.triangles;
-        var vertices = meshFilter.sharedMesh.vertices;
-        var trans = meshFilter.transform;
-        for (int i = 0, j=0; i < meshFilter.sharedMesh.triangles.Length; i+=3,j++)
+        var buildingComponentTriangles = new BuildingComponentTriangle[polyhedron.FaceCount];
+
+        for (var i = 0; i < polyhedron.FaceCount; i++)
         {
-            var vertex0 = trans.TransformPoint(vertices[triangles[i]]);
-            var vertex1 = trans.TransformPoint(vertices[triangles[i +1]]);
-            var vertex2 = trans.TransformPoint(vertices[triangles[i +2]]);
-
-            buildingComponentTriangles[j] = new BuildingComponentTriangle(new Triangle3d(VectorToVector3d(vertex0), VectorToVector3d(vertex1),
-                VectorToVector3d(vertex2)),id);
+            var triangle = triangles[i];
+            buildingComponentTriangles[i] = new BuildingComponentTriangle(new Triangle3d(Point3dToVector3d(triangle.A), Point3dToVector3d(triangle.B),
+                Point3dToVector3d(triangle.C)), id);
         }
 
         return buildingComponentTriangles;
@@ -174,6 +206,11 @@ public class Manager : MonoBehaviour
     private static Vector3d VectorToVector3d(Vector3 vector)
     {
         return new Vector3d(vector.x, vector.y, vector.z);
+    }
+
+    private static Vector3d Point3dToVector3d(Point3d point3d)
+    {
+        return new Vector3d(point3d.x, point3d.y, point3d.z);
     }
 
     private static Vector3 Vector3dToVector(Vector3d vector)
@@ -210,11 +247,11 @@ public class Manager : MonoBehaviour
 public class BuildingComponentTriangle
 {
     public Triangle3d Triangle { get; }
-    public int ObjectId { get; }
+    public string SurfaceId { get; }
 
-    public BuildingComponentTriangle(Triangle3d triangle, int id)
+    public BuildingComponentTriangle(Triangle3d triangle, string id)
     {
         Triangle = triangle;
-        ObjectId = id;
+        SurfaceId = id;
     }
 }
