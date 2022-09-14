@@ -30,12 +30,13 @@ public class Manager : MonoBehaviour
     {
         if (ClearExportFiles)
         {
-            System.IO.File.WriteAllText(ExportPointsFilePath, string.Empty);
-            System.IO.File.WriteAllText(ExportSurfaceFilePath, string.Empty);
+            File.WriteAllText(ExportPointsFilePath, string.Empty);
+            File.WriteAllText(ExportSurfaceFilePath, string.Empty);
         }
 
         var boxSize = MaxDistToObject * 2;
         await UpdateBoundsOctree(boxSize);
+        Debug.Log($"Surfaces are stored in file!");
         //visualise some points to check if they match with the 3d model
         if (VisualisePoints)
         {
@@ -136,7 +137,7 @@ public class Manager : MonoBehaviour
                 var objSurfaceText = $"{surfaceId}, {box3D.Min}, {box3D.Max}, {point}";
                 objectsSurfacesText.Add(objSurfaceText);
 
-                var buildingComponentTriangles = BuildingComponentTriangles(surface, surfaceId);
+                var buildingComponentTriangles = BuildingComponentTriangles(meshFilter, surface, surfaceId);
 
                 foreach (var triangle in buildingComponentTriangles)
                 {
@@ -186,7 +187,7 @@ public class Manager : MonoBehaviour
         }
     }
 
-    private BuildingComponentTriangle[] BuildingComponentTriangles(Polyhedron3 polyhedron, string id)
+    private BuildingComponentTriangle[] BuildingComponentTriangles(MeshFilter meshFilter, Polyhedron3 polyhedron, string id)
     {
         var triangles = new CGALDotNetGeometry.Shapes.Triangle3d[polyhedron.FaceCount];
         polyhedron.GetTriangles(triangles, polyhedron.FaceCount);
@@ -196,8 +197,11 @@ public class Manager : MonoBehaviour
         for (var i = 0; i < polyhedron.FaceCount; i++)
         {
             var triangle = triangles[i];
-            buildingComponentTriangles[i] = new BuildingComponentTriangle(new Triangle3d(Point3dToVector3d(triangle.A), Point3dToVector3d(triangle.B),
-                Point3dToVector3d(triangle.C)), id);
+            var pointA = meshFilter.transform.TransformPoint(Point3dToVector3(triangle.A));
+            var pointB = meshFilter.transform.TransformPoint(Point3dToVector3(triangle.B));
+            var pointC = meshFilter.transform.TransformPoint(Point3dToVector3(triangle.C));
+            buildingComponentTriangles[i] = new BuildingComponentTriangle(new Triangle3d(VectorToVector3d(pointA), VectorToVector3d(pointB),
+                VectorToVector3d(pointC)), id);
         }
 
         return buildingComponentTriangles;
@@ -211,6 +215,11 @@ public class Manager : MonoBehaviour
     private static Vector3d Point3dToVector3d(Point3d point3d)
     {
         return new Vector3d(point3d.x, point3d.y, point3d.z);
+    }
+
+    private static Vector3 Point3dToVector3(Point3d point3d)
+    {
+        return new Vector3((float)point3d.x, (float)point3d.y, (float)point3d.z);
     }
 
     private static Vector3 Vector3dToVector(Vector3d vector)
