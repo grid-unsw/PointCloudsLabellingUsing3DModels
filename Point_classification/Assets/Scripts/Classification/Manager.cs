@@ -133,8 +133,12 @@ public class Manager : MonoBehaviour
                 var normals = new CGALDotNetGeometry.Numerics.Vector3d[1];
                 surface.GetFaceNormals(normals, 1);
                 var normal = normals[0];
-                var point = new Point3d(normal.x, normal.y, normal.z);
-                var objSurfaceText = $"{surfaceId}, {box3D.Min}, {box3D.Max}, {point}";
+                var point = new Vector3((float)normal.x, (float)normal.y, (float)normal.z);
+                var pointMinTranslated = meshFilter.transform.TransformPoint(Point3dToVector3(box3D.Min));
+                var pointMaxTranslated = meshFilter.transform.TransformPoint(Point3dToVector3(box3D.Max));
+                var pointMin = Vector3.Min(pointMinTranslated, pointMaxTranslated);
+                var pointMax = Vector3.Max(pointMinTranslated, pointMaxTranslated);
+                var objSurfaceText = $"{surfaceId}, {SwitchYZAxes(pointMin)}, {SwitchYZAxes(pointMax)}, {SwitchYZAxes(point)}";
                 objectsSurfacesText.Add(objSurfaceText);
 
                 var buildingComponentTriangles = BuildingComponentTriangles(meshFilter, surface, surfaceId);
@@ -212,11 +216,6 @@ public class Manager : MonoBehaviour
         return new Vector3d(vector.x, vector.y, vector.z);
     }
 
-    private static Vector3d Point3dToVector3d(Point3d point3d)
-    {
-        return new Vector3d(point3d.x, point3d.y, point3d.z);
-    }
-
     private static Vector3 Point3dToVector3(Point3d point3d)
     {
         return new Vector3((float)point3d.x, (float)point3d.y, (float)point3d.z);
@@ -250,6 +249,11 @@ public class Manager : MonoBehaviour
         }
 
         return (min, max);
+    }
+
+    private static Vector3 SwitchYZAxes(Vector3 vector)
+    {
+        return new Vector3(vector.x, vector.z, vector.y);
     }
 }
 
